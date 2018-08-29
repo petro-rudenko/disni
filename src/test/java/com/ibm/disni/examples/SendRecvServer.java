@@ -54,7 +54,7 @@ public class SendRecvServer implements RdmaEndpointFactory<SendRecvServer.Custom
 
 		//we can call bind on a server endpoint, just like we do with sockets
 		InetAddress ipAddress = InetAddress.getByName(host);
-		InetSocketAddress address = new InetSocketAddress(ipAddress, port);				
+		InetSocketAddress address = new InetSocketAddress(ipAddress, port);
 		serverEndpoint.bind(address, 10);
 		System.out.println("SimpleServer::servers bound to address " + address.toString());
 

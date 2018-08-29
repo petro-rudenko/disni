@@ -54,8 +54,8 @@ public class SendRecvClient implements RdmaEndpointFactory<SendRecvClient.Custom
 		SendRecvClient.CustomClientEndpoint endpoint = endpointGroup.createEndpoint();
 
 		//connect to the server
- 		InetAddress ipAddress = InetAddress.getByName(host);
- 		InetSocketAddress address = new InetSocketAddress(ipAddress, port);			
+		InetAddress ipAddress = InetAddress.getByName(host);
+		InetSocketAddress address = new InetSocketAddress(ipAddress, port);
 		endpoint.connect(address, 1000);
 		System.out.println("SimpleClient::client channel set up ");
 

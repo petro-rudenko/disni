@@ -31,25 +31,23 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.LinkedList;
 
 public class SendRecvClient implements RdmaEndpointFactory<SendRecvClient.SendRecvEndpoint> {
 	private RdmaPassiveEndpointGroup<SendRecvEndpoint> group;
-	private String host;
-	private int port;
 	private int size;
 	private int loop;
 	private int recvQueueSize;
+	private InetSocketAddress address;
 
 	public SendRecvClient(String host, int port, int size, int loop, int recvQueueSize) throws IOException{
-		this.group = new RdmaPassiveEndpointGroup<SendRecvClient.SendRecvEndpoint>(1, recvQueueSize, 1, recvQueueSize*2);
-		this.group.init(this);
-		this.host = host;
-		this.port = port;
 		this.size = size;
 		this.loop = loop;
 		this.recvQueueSize = recvQueueSize;
+		InetAddress ipAddress = InetAddress.getByName(host);
+		address = new InetSocketAddress(ipAddress, port);
 	}
 
 	public SendRecvClient.SendRecvEndpoint createEndpoint(RdmaCmId id, boolean serverSide)
@@ -57,15 +55,46 @@ public class SendRecvClient implements RdmaEndpointFactory<SendRecvClient.SendRe
 		return new SendRecvEndpoint(group, id, serverSide, size, recvQueueSize);
 	}
 
+	public void runTCP() throws Exception {
+		SocketChannel socketChannel = SocketChannel.open(address);
+		socketChannel.configureBlocking(true);
+		socketChannel.socket().setReceiveBufferSize(size);
+		socketChannel.socket().setSendBufferSize(size);
+		ByteBuffer sendBuf = ByteBuffer.allocateDirect(size);
+		ByteBuffer recvBuf = ByteBuffer.allocateDirect(size);
+		sendBuf.asCharBuffer().put("PING").clear();
+		long startTime = System.nanoTime();
+		for (int i = 0; i < loop; i++){
+			int read = 0;
+			int written = 0;
 
-	private void run() throws Exception {
-		System.out.println("SendRecvClient, size " + size + ", loop " + loop + ", recvQueueSize " + recvQueueSize + ", port " + port);
+			// Send PING
+			sendBuf.clear();
+			do {
+				written += socketChannel.write(sendBuf);
+			} while (written != size);
+
+			// Recv PONG
+			do {
+				read += socketChannel.read(recvBuf);
+			} while (read != size);
+			recvBuf.clear();
+		}
+		printResults(startTime);
+		socketChannel.close();
+	}
+
+
+	private void runRdma() throws Exception {
+		this.group = new RdmaPassiveEndpointGroup<SendRecvClient.SendRecvEndpoint>(1, recvQueueSize, 1, recvQueueSize*2);
+		this.group.init(this);
+		System.out.println("SendRecvClient, size " + size + ", loop " + loop + ", recvQueueSize " + recvQueueSize +
+			", server address " + address);
 
 		SendRecvClient.SendRecvEndpoint endpoint = group.createEndpoint();
- 		InetAddress ipAddress = InetAddress.getByName(host);
- 		InetSocketAddress address = new InetSocketAddress(ipAddress, port);		
+
 		endpoint.connect(address, 1000);
-		System.out.println("SendRecvClient, client connected, address " + host + ", port " + 1919);
+		System.out.println("SendRecvClient, client connected, address " + address);
 
 		int opCount = 0;
 		long start = System.nanoTime();
@@ -81,20 +110,20 @@ public class SendRecvClient implements RdmaEndpointFactory<SendRecvClient.SendRe
 		}
 		endpoint.awaitRecvs();
 		endpoint.awaitSends();
-		long end = System.nanoTime();
-		long duration = end - start;
-		double _ops = (double) loop;
-		double _duration = (double) duration;
-		double _seconds = _duration / 1000 / 1000 / 1000;
-		double iops = _ops / _seconds;
-		System.out.println("iops " + iops);
-
+		printResults(start);
 
 		//close everything
 		endpoint.close();
 		group.close();
 	}
 
+	private void printResults(long startTime){
+		long duration = System.nanoTime() - startTime;
+		long totalSize = (long)size * 2 * loop;
+		System.out.println("Total time: " + duration / 1e6 + " ms");
+		System.out.println("Bidirectional bandwidth: " + totalSize * 1e9/1024/1024/1024/duration + " Gb/s");
+		System.out.println("Bidirectional average latency: " + duration  / (1e6 * loop) + " ms");
+	}
 
 	public static void main(String[] args) throws Exception {
 		SendRecvCmdLine cmdLine = new SendRecvCmdLine("SendRecvClient");
@@ -107,7 +136,11 @@ public class SendRecvClient implements RdmaEndpointFactory<SendRecvClient.SendRe
 
 		SendRecvClient server = new SendRecvClient(cmdLine.getIp(), cmdLine.getPort(),
 				cmdLine.getSize(), cmdLine.getLoop(), cmdLine.getQueueDepth());
-		server.run();
+		if (cmdLine.getMode() == SendRecvCmdLine.Mode.TCP){
+			server.runTCP();
+		} else {
+			server.runRdma();
+		}
 	}
 
 	public static class SendRecvEndpoint extends RdmaEndpoint {
