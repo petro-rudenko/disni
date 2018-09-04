@@ -34,53 +34,11 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.LinkedList;
 import java.util.concurrent.ArrayBlockingQueue;
 
-class OdpStats {
-	private String[] statFsOdpFiles = new String[]{"invalidations_faults_contentions", "num_invalidation_pages",
-		"num_invalidations", "num_page_fault_pages", "num_page_faults", "num_prefetches_handled",
-		"num_prefetch_pages"};
-	private String sysFsFolder;
-	private long[] initialOdpStat;
-
-	OdpStats(int deviceNum) {
-		sysFsFolder = "/sys/class/infiniband_verbs/uverbs" + deviceNum + "/";
-		initialOdpStat = getOdpStat();
-	}
-
-	private long[] getOdpStat() {
-		long[] result = new long[statFsOdpFiles.length];
-		for (int i = 0; i < statFsOdpFiles.length; i++) {
-			String f = statFsOdpFiles[i];
-			Path p = Paths.get(sysFsFolder, f);
-			long val = 0;
-			try {
-				String r = Files.lines(p).findFirst().get();
-				val = Long.parseLong(r);
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-			result[i] = val;
-		}
-		return result;
-	}
-
-
-	void printODPStatistics() {
-		long[] finalStats = getOdpStat();
-		for (int i = 0; i < statFsOdpFiles.length; i++) {
-			System.out.println(statFsOdpFiles[i] + ": " + (finalStats[i] - initialOdpStat[i]));
-		}
-	}
-}
-
-public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadServerEndpoint> {
-	private RdmaActiveEndpointGroup<OdpReadServerEndpoint> group;
+public class OdpReadServer2 implements RdmaEndpointFactory<OdpReadServer2.OdpReadServerEndpoint2> {
+	private RdmaActiveEndpointGroup<OdpReadServerEndpoint2> group;
 	private String host;
 	private int port;
 	private int size;
@@ -89,9 +47,9 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 	private int deviceNum;
 	private boolean doPrefetch;
 
-	public OdpReadServer(String host, int port, int size, int loop,
+	public OdpReadServer2(String host, int port, int size, int loop,
 						 long fileSize, int deviceNum, boolean doPrefetch) throws IOException{
-		this.group = new RdmaActiveEndpointGroup<OdpReadServerEndpoint>(1, false, 128, 4, 128);
+		this.group = new RdmaActiveEndpointGroup<OdpReadServerEndpoint2>(1, false, 128, 4, 128);
 		this.group.init(this);
 		this.host = host;
 		this.port = port;
@@ -102,9 +60,9 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 		this.doPrefetch = doPrefetch;
 	}
 
-	public OdpReadServerEndpoint createEndpoint(RdmaCmId id, boolean serverSide)
+	public OdpReadServerEndpoint2 createEndpoint(RdmaCmId id, boolean serverSide)
 		throws IOException {
-		return new OdpReadServerEndpoint(group, id, serverSide, size, fileSize, doPrefetch);
+		return new OdpReadServerEndpoint2(group, id, serverSide, size, fileSize, doPrefetch);
 	}
 
 
@@ -112,11 +70,11 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 		OdpStats stats = new OdpStats(deviceNum);
 		System.out.println("ReadServer, size " + size + ", loop " + loop);
 
-		RdmaServerEndpoint<OdpReadServerEndpoint> serverEndpoint = group.createServerEndpoint();
+		RdmaServerEndpoint<OdpReadServerEndpoint2> serverEndpoint = group.createServerEndpoint();
 		InetAddress ipAddress = InetAddress.getByName(host);
 		InetSocketAddress address = new InetSocketAddress(ipAddress, port);
 		serverEndpoint.bind(address, 10);
-		OdpReadServerEndpoint endpoint = serverEndpoint.accept();
+		OdpReadServerEndpoint2 endpoint = serverEndpoint.accept();
 		System.out.println("ReadServer, client connected, address " + address.toString());
 
 		//let's send a message to the client
@@ -147,13 +105,13 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 			System.exit(-1);
 		}
 
-		OdpReadServer server = new OdpReadServer(cmdLine.getIp(), cmdLine.getPort(),
+		OdpReadServer2 server = new OdpReadServer2(cmdLine.getIp(), cmdLine.getPort(),
 			cmdLine.getSize(), cmdLine.getLoop(), cmdLine.getFileSize(),
 			cmdLine.getDeviceNum(), cmdLine.getDoPrefetch());
 		server.run();
 	}
 
-	public static class OdpReadServerEndpoint extends RdmaActiveEndpoint {
+	public static class OdpReadServerEndpoint2 extends RdmaActiveEndpoint {
 		private ArrayBlockingQueue<IbvWC> wcEvents;
 
 		private ByteBuffer buffers[];
@@ -178,7 +136,7 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 		private boolean doPrefecth;
 
 
-		protected OdpReadServerEndpoint(RdmaActiveEndpointGroup<? extends RdmaEndpoint> group, RdmaCmId idPriv,
+		protected OdpReadServerEndpoint2(RdmaActiveEndpointGroup<? extends RdmaEndpoint> group, RdmaCmId idPriv,
 										boolean serverSide, int size, long fileSize, boolean doPrefetch) throws IOException {
 			super(group, idPriv, serverSide);
 			this.buffersize = size;
@@ -223,6 +181,10 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 			}
 		}
 
+		private static long roundUpTo4096(long i) {
+			return (i + 0xfffL) & ~0xfffL;
+		}
+
 		@Override
 		protected synchronized void init() throws IOException {
 			super.init();
@@ -245,18 +207,26 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 			// Write 15 Gb data to it
 			System.out.println("Registering ODP  buffer");
 			long fileAddress = 0;
-			try {
-				// First MMAp whole big file
-				fileAddress = (long) mmap.invoke(channel, 1, 0L, fileSize);
-				sendBuf.putLong(fileAddress);
-				sendBuf.putLong(fileSize);
-			} catch (Exception ex) {
-				ex.printStackTrace();
+
+			for (long i = 0; i < 1000; i++) {
+				try {
+					long start = i*buffersize ;
+					long distanceFromPageBoundary = start % 4096;
+					long allignOffset = start - distanceFromPageBoundary;
+					long alignedLength = roundUpTo4096(buffersize + distanceFromPageBoundary);
+					fileAddress = (long)mmap.invoke(channel, 1, allignOffset, alignedLength);
+					if (doPrefecth){
+						odp.expPrefetchMr(allignOffset, (int)alignedLength);
+					}
+					sendBuf.putLong(fileAddress);
+				} catch (IllegalAccessException e) {
+					e.printStackTrace();
+				} catch (InvocationTargetException e) {
+					e.printStackTrace();
+				}
+				//System.out.println("Registered ODP file portion: " + fileAddress);
 			}
 
-			if (doPrefecth) {
-				odp.expPrefetchMr(fileAddress, (int)(Integer.MAX_VALUE - 1));
-			}
 
 			/*
 			ByteBuffer sendBuf = buffers[1];
@@ -268,8 +238,6 @@ public class OdpReadServer implements RdmaEndpointFactory<OdpReadServer.OdpReadS
 
 
 			sendBuf.clear();
-			System.out.println("Sending addresss: " + fileAddress);
-
 			sgeSend.setAddr(sendMr.getAddr());
 			sgeSend.setLength(sendMr.getLength());
 			sgeSend.setLkey(sendMr.getLkey());
