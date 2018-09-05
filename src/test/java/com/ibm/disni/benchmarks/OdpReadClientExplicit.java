@@ -33,17 +33,16 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.LinkedList;
-import java.util.concurrent.ThreadLocalRandom;
 
-public class OdpReadClient2 implements RdmaEndpointFactory<OdpReadClient2.ReadClientEndpoint> {
+public class OdpReadClientExplicit implements RdmaEndpointFactory<OdpReadClientExplicit.ReadClientEndpoint> {
 	private RdmaPassiveEndpointGroup<ReadClientEndpoint> group;
 	private String host;
 	private int port;
 	private int size;
 	private int loop;
 
-	public OdpReadClient2(String host, int port, int size, int loop) throws IOException{
-		this.group = new RdmaPassiveEndpointGroup<OdpReadClient2.ReadClientEndpoint>(1, 10, 4, 40);
+	public OdpReadClientExplicit(String host, int port, int size, int loop) throws IOException{
+		this.group = new RdmaPassiveEndpointGroup<OdpReadClientExplicit.ReadClientEndpoint>(1, 10, 4, 40);
 		this.group.init(this);
 		this.host = host;
 		this.port = port;
@@ -51,7 +50,7 @@ public class OdpReadClient2 implements RdmaEndpointFactory<OdpReadClient2.ReadCl
 		this.loop = loop;
 	}
 
-	public OdpReadClient2.ReadClientEndpoint createEndpoint(RdmaCmId id, boolean serverSide)
+	public OdpReadClientExplicit.ReadClientEndpoint createEndpoint(RdmaCmId id, boolean serverSide)
 			throws IOException {
 		return new ReadClientEndpoint(group, id, serverSide, size);
 	}
@@ -59,7 +58,7 @@ public class OdpReadClient2 implements RdmaEndpointFactory<OdpReadClient2.ReadCl
 	private void run() throws Exception {
 		System.out.println("ReadClient, size " + size + ", loop " + loop);
 
-		OdpReadClient2.ReadClientEndpoint endpoint = group.createEndpoint();
+		OdpReadClientExplicit.ReadClientEndpoint endpoint = group.createEndpoint();
  		InetAddress ipAddress = InetAddress.getByName(host);
  		InetSocketAddress address = new InetSocketAddress(ipAddress, port);
 		endpoint.connect(address, 1000);
@@ -73,47 +72,43 @@ public class OdpReadClient2 implements RdmaEndpointFactory<OdpReadClient2.ReadCl
 		//it contains some RDMA information sent by the server
 		recvBuf.clear();
 
-
+		//Normal MR data
+		long addr1 = recvBuf.getLong();
+		int length1 = recvBuf.getInt();
+		int lkey1 = recvBuf.getInt();
 		System.out.println("ReadClient, preparing read operation... ");
 		//the RDMA information above identifies a RDMA buffer at the server side
 		//let's issue a one-sided RDMA read opeation to fetch the content from that buffer
+		IbvSendWR sendWR1 = endpoint.getSendWR();
+		sendWR1.setWr_id(1001);
+		sendWR1.setOpcode(IbvSendWR.IBV_WR_RDMA_READ);
+		sendWR1.setSend_flags(IbvSendWR.IBV_SEND_SIGNALED);
+		sendWR1.getRdma().setRkey(lkey1);
+		sendWR1.getRdma().setRemote_addr(addr1);
+		SVCPostSend postSend1 = endpoint.newPostSend();
 
+		postSend1.execute();
+		endpoint.pollUntil();
 
-		for (int i=0; i < loop; i++){
-			//Normal MR data
-			long addr1 = recvBuf.getLong();
-			int length1 = recvBuf.getInt();
-			int lkey1 = recvBuf.getInt();
-
-			IbvSendWR sendWR1 = endpoint.getSendWR();
-			sendWR1.setWr_id(1001);
-			sendWR1.setOpcode(IbvSendWR.IBV_WR_RDMA_READ);
-			sendWR1.setSend_flags(IbvSendWR.IBV_SEND_SIGNALED);
-			sendWR1.getRdma().setRkey(lkey1);
-			sendWR1.getRdma().setRemote_addr(addr1);
-			SVCPostSend postSend1 = endpoint.newPostSend();
-
-			postSend1.execute();
-			endpoint.pollUntil();
-		}
 
 		// ODP data
-		int lkey = recvBuf.getInt();
+
 		IbvSendWR sendWR = endpoint.getSendWR();
 		sendWR.setWr_id(1001);
 		sendWR.setOpcode(IbvSendWR.IBV_WR_RDMA_READ);
 		sendWR.setSend_flags(IbvSendWR.IBV_SEND_SIGNALED);
-		sendWR.getRdma().setRkey(lkey);
-
 
 		long addr = 0L;
+		int lkey = 0;
 		//post the operation on the endpoint
 
 		SVCPostSend postSend = endpoint.newPostSend();
 		long start = System.nanoTime();
 		for (int i = 0; i < loop; i++){
 			addr = recvBuf.getLong();
+			lkey = recvBuf.getInt();
 			postSend.getWrMod(0).getRdmaMod().setRemote_addr(addr);
+			postSend.getWrMod(0).getRdmaMod().setRkey(lkey);
 			//postSend.getWrMod(0).getSgeMod(0).setLength(len);
 			postSend.execute();
 			endpoint.pollUntil();
@@ -150,7 +145,7 @@ public class OdpReadClient2 implements RdmaEndpointFactory<OdpReadClient2.ReadCl
 			System.exit(-1);
 		}
 
-		OdpReadClient2 client = new OdpReadClient2(cmdLine.getIp(), cmdLine.getPort(), cmdLine.getSize(), cmdLine.getLoop());
+		OdpReadClientExplicit client = new OdpReadClientExplicit(cmdLine.getIp(), cmdLine.getPort(), cmdLine.getSize(), cmdLine.getLoop());
 		client.run();
 	}
 

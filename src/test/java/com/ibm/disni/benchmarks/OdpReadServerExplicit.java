@@ -37,7 +37,7 @@ import java.nio.channels.FileChannel;
 import java.util.LinkedList;
 import java.util.concurrent.ArrayBlockingQueue;
 
-public class OdpReadServer2 implements RdmaEndpointFactory<OdpReadServer2.OdpReadServerEndpoint2> {
+public class OdpReadServerExplicit implements RdmaEndpointFactory<OdpReadServerExplicit.OdpReadServerEndpoint2> {
 	private RdmaActiveEndpointGroup<OdpReadServerEndpoint2> group;
 	private String host;
 	private int port;
@@ -47,8 +47,8 @@ public class OdpReadServer2 implements RdmaEndpointFactory<OdpReadServer2.OdpRea
 	private int deviceNum;
 	private boolean doPrefetch;
 
-	public OdpReadServer2(String host, int port, int size, int loop,
-						 long fileSize, int deviceNum, boolean doPrefetch) throws IOException{
+	public OdpReadServerExplicit(String host, int port, int size, int loop,
+                                 long fileSize, int deviceNum, boolean doPrefetch) throws IOException{
 		this.group = new RdmaActiveEndpointGroup<OdpReadServerEndpoint2>(1, false, 128, 4, 128);
 		this.group.init(this);
 		this.host = host;
@@ -105,7 +105,7 @@ public class OdpReadServer2 implements RdmaEndpointFactory<OdpReadServer2.OdpRea
 			System.exit(-1);
 		}
 
-		OdpReadServer2 server = new OdpReadServer2(cmdLine.getIp(), cmdLine.getPort(),
+		OdpReadServerExplicit server = new OdpReadServerExplicit(cmdLine.getIp(), cmdLine.getPort(),
 			cmdLine.getSize(), cmdLine.getLoop(), cmdLine.getFileSize(),
 			cmdLine.getDeviceNum(), cmdLine.getDoPrefetch());
 		server.run();
@@ -196,31 +196,33 @@ public class OdpReadServer2 implements RdmaEndpointFactory<OdpReadServer2.OdpRea
 			this.sendMr = mrlist[1];
 			this.recvMr = mrlist[2];
 
-			// ODP
-			SVCRegMr sMr = pd.regMr(0, -1, access | IbvMr.IBV_ACCESS_ON_DEMAND).execute();
-			IbvMr odp = sMr.getMr();
+
 			// Create some mmap file
 			RandomAccessFile f = new RandomAccessFile("/scrap/users/swat/jenkins/mmap", "rw");
 			FileChannel channel = f.getChannel();
 			ByteBuffer sendBuf = buffers[1];
-			long[] tempBuffOdp = new long[1000];
 
+			// Put normal MR data
+			sendBuf.putLong(dataMr.getAddr());
+			sendBuf.putInt(dataMr.getLength());
+			sendBuf.putInt(dataMr.getLkey());
 
-			// Write 15 Gb data to it
 			System.out.println("Registering ODP  buffer");
 			long fileAddress = 0;
 
-			for (int i = 0; i < 1000; i++) {
+			for (long i = 0; i < 1000; i++) {
 				try {
-					long start = i*(long)buffersize ;
+					long start = i*buffersize ;
 					long distanceFromPageBoundary = start % 4096;
 					long allignOffset = start - distanceFromPageBoundary;
 					long alignedLength = buffersize + distanceFromPageBoundary;
 					fileAddress = (long)mmap.invoke(channel, 1, allignOffset, alignedLength);
+					IbvMr odp = pd.regMr(fileAddress, buffersize, access | IbvMr.IBV_ACCESS_ON_DEMAND).execute().free().getMr();
 					if (doPrefecth){
 						odp.expPrefetchMr(allignOffset, buffersize);
 					}
-					tempBuffOdp[i] = fileAddress;
+					sendBuf.putLong(odp.getAddr());
+					sendBuf.putInt(odp.getLkey());
 				} catch (IllegalAccessException e) {
 					e.printStackTrace();
 				} catch (InvocationTargetException e) {
@@ -229,19 +231,6 @@ public class OdpReadServer2 implements RdmaEndpointFactory<OdpReadServer2.OdpRea
 				//System.out.println("Registered ODP file portion: " + fileAddress);
 			}
 
-			// Put normal MR data
-			for (int i = 0; i < 1000; i++) {
-				IbvMr mr = registerMemory(ByteBuffer.allocateDirect(buffersize)).execute().free().getMr();
-				sendBuf.putLong(mr.getAddr());
-				sendBuf.putInt(mr.getLength());
-				sendBuf.putInt(mr.getLkey());
-			}
-
-			// ODP data
-			sendBuf.putInt(odp.getLkey());
-			for (int i = 0; i < 1000; i++){
-				sendBuf.putLong(tempBuffOdp[i]);
-			}
 
 			/*
 			ByteBuffer sendBuf = buffers[1];
